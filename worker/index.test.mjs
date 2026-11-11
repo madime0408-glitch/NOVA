@@ -70,7 +70,7 @@ test("search summarizes safe Tavily results with Workers AI and preserves the so
   assert.equal(upstreamRequest.url, "https://api.tavily.com/search");
   assert.equal(upstreamRequest.options.headers.Authorization, "Bearer private-test-key");
   assert.equal(JSON.parse(upstreamRequest.options.body).search_depth, "basic");
-  assert.equal(aiRequest.model, "@cf/meta/llama-3.1-8b-instruct");
+  assert.equal(aiRequest.model, "@cf/openai/gpt-oss-20b");
   assert.match(aiRequest.options.prompt, /web search/);
   assert.match(aiRequest.options.prompt, /A useful excerpt/);
   assert.doesNotMatch(aiRequest.options.prompt, /Unsafe source/);

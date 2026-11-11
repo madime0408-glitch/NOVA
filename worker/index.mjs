@@ -3,7 +3,7 @@ const allowedOrigins = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]);
-const aiModel = "@cf/meta/llama-3.1-8b-instruct";
+const aiModel = "@cf/openai/gpt-oss-20b";
 
 function jsonResponse(body, status, origin) {
   const headers = new Headers({

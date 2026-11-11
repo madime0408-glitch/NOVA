@@ -1,0 +1,13 @@
+{
+  "name": "nova-claude-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Espace de travail Nova connecté à l’API Claude",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check app.js"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}

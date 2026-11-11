@@ -1,0 +1,112 @@
+const allowedOrigins = new Set([
+  "https://madime0408-glitch.github.io",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+
+function jsonResponse(body, status, origin) {
+  const headers = new Headers({
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json; charset=utf-8",
+    "Vary": "Origin",
+  });
+  if (allowedOrigins.has(origin)) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Headers", "Content-Type");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  }
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const origin = request.headers.get("Origin") || "";
+
+    if (request.method === "OPTIONS" && !allowedOrigins.has(origin)) {
+      return new Response(null, { status: 403 });
+    }
+    if (origin && !allowedOrigins.has(origin)) {
+      return jsonResponse({ error: "Origine non autorisée." }, 403, "");
+    }
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Vary": "Origin",
+      } });
+    }
+    if (url.pathname === "/health" && request.method === "GET") {
+      return jsonResponse({ configured: Boolean(env.TAVILY_API_KEY) }, 200, origin);
+    }
+    if (url.pathname !== "/search" || request.method !== "POST") {
+      return jsonResponse({ error: "Page introuvable." }, 404, origin);
+    }
+    if (!env.TAVILY_API_KEY) {
+      return jsonResponse({ error: "La clé du moteur de recherche n’est pas configurée." }, 503, origin);
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: "La requête doit contenir un JSON valide." }, 400, origin);
+    }
+
+    const query = body && typeof body.query === "string" ? body.query.trim() : "";
+    if (!query || query.length > 300) {
+      return jsonResponse({ error: "La recherche doit contenir entre 1 et 300 caractères." }, 400, origin);
+    }
+
+    let providerResponse;
+    try {
+      providerResponse = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.TAVILY_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query,
+          search_depth: "basic",
+          topic: "general",
+          max_results: 8,
+          include_answer: false,
+          include_images: false,
+        }),
+      });
+    } catch (error) {
+      console.error("Échec de connexion au fournisseur de recherche :", error.message);
+      return jsonResponse({ error: "Le moteur de recherche est momentanément inaccessible." }, 502, origin);
+    }
+
+    if (!providerResponse.ok) {
+      const status = providerResponse.status === 429 ? 429 : 502;
+      const message = status === 429
+        ? "Le quota gratuit de recherche est épuisé ou temporairement limité."
+        : "Le fournisseur de recherche a refusé la requête. Vérifiez la configuration.";
+      return jsonResponse({ error: message }, status, origin);
+    }
+
+    let results;
+    try {
+      const data = await providerResponse.json();
+      if (!Array.isArray(data.results)) {
+        throw new Error("Réponse sans liste de résultats.");
+      }
+      results = data.results
+        .filter((result) => typeof result.title === "string" && typeof result.url === "string")
+        .map((result) => ({
+          title: result.title,
+          url: result.url,
+          content: typeof result.content === "string" ? result.content.slice(0, 700) : "",
+        }));
+    } catch (error) {
+      console.error("Réponse invalide du fournisseur de recherche :", error.message);
+      return jsonResponse({ error: "Le fournisseur a renvoyé une réponse invalide." }, 502, origin);
+    }
+
+    return jsonResponse({ query, results }, 200, origin);
+  },
+};

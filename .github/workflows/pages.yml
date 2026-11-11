@@ -27,8 +27,7 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir -p _site
-          cp index.html app.js styles.css _site/
-          printf 'window.NOVA_STATIC_HOSTING = true;\n' > _site/deployment-config.js
+          cp index.html app.js styles.css deployment-config.js _site/
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

@@ -7,12 +7,12 @@ const origin = "https://madime0408-glitch.github.io";
 test("health reports configuration without exposing the API key", async () => {
   const response = await worker.fetch(
     new Request("https://nova-search.example.workers.dev/health", { headers: { Origin: origin } }),
-    { TAVILY_API_KEY: "private-test-key" },
+    { TAVILY_API_KEY: "private-test-key", AI: { run() {} } },
   );
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
-  assert.deepEqual(await response.json(), { configured: true });
+  assert.deepEqual(await response.json(), { configured: true, aiConfigured: true });
 });
 
 test("search rejects invalid queries before calling the provider", async () => {
@@ -35,16 +35,26 @@ test("search rejects invalid queries before calling the provider", async () => {
   }
 });
 
-test("search uses the free basic tier and returns only source results", async (t) => {
+test("search summarizes safe Tavily results with Workers AI and preserves the sources", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   let upstreamRequest;
+  let aiRequest;
   globalThis.fetch = async (url, options) => {
     upstreamRequest = { url, options };
     return new Response(JSON.stringify({
       answer: "This generated answer must not be returned.",
-      results: [{ title: "Source", url: "https://example.com/article", content: "A useful excerpt." }],
+      results: [
+        { title: "Source", url: "https://example.com/article", content: "A useful excerpt." },
+        { title: "Unsafe source", url: "javascript:alert(1)", content: "This must be discarded." },
+      ],
     }), { status: 200 });
+  };
+  const AI = {
+    async run(model, options) {
+      aiRequest = { model, options };
+      return { response: "Les sources décrivent un exemple utile. [1]" };
+    },
   };
 
   const response = await worker.fetch(
@@ -53,17 +63,51 @@ test("search uses the free basic tier and returns only source results", async (t
       headers: { Origin: origin, "Content-Type": "application/json" },
       body: JSON.stringify({ query: "web search" }),
     }),
-    { TAVILY_API_KEY: "private-test-key" },
+    { TAVILY_API_KEY: "private-test-key", AI },
   );
 
   assert.equal(response.status, 200);
   assert.equal(upstreamRequest.url, "https://api.tavily.com/search");
   assert.equal(upstreamRequest.options.headers.Authorization, "Bearer private-test-key");
   assert.equal(JSON.parse(upstreamRequest.options.body).search_depth, "basic");
+  assert.equal(aiRequest.model, "@cf/meta/llama-3.1-8b-instruct");
+  assert.match(aiRequest.options.prompt, /web search/);
+  assert.match(aiRequest.options.prompt, /A useful excerpt/);
+  assert.doesNotMatch(aiRequest.options.prompt, /Unsafe source/);
   assert.deepEqual(await response.json(), {
     query: "web search",
+    answer: "Les sources décrivent un exemple utile. [1]",
+    summaryError: "",
     results: [{ title: "Source", url: "https://example.com/article", content: "A useful excerpt." }],
   });
+});
+
+test("AI failures leave the search sources available and report the synthesis error", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    results: [{ title: "Source", url: "https://example.com/article", content: "A useful excerpt." }],
+  }), { status: 200 });
+  const AI = {
+    async run() {
+    throw new Error("AI quota exceeded");
+    },
+  };
+
+  const response = await worker.fetch(
+    new Request("https://nova-search.example.workers.dev/search", {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "web search" }),
+    }),
+    { TAVILY_API_KEY: "private-test-key", AI },
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.answer, "");
+  assert.match(payload.summaryError, /synthèse IA/i);
+  assert.equal(payload.results.length, 1);
 });
 
 test("search reports an exhausted provider quota without hiding the error", async (t) => {

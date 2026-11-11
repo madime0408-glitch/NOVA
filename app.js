@@ -63,7 +63,7 @@ function showView(view, title, activeNav = view === "result" ? "home" : view) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function renderResult(query, { results = [], loading = false, error = "" } = {}) {
+function renderResult(query, { results = [], answer = "", summaryError = "", loading = false, error = "" } = {}) {
   currentQuery = query;
   const alreadySaved = saved.includes(query);
   const validResults = results.flatMap((result) => {
@@ -75,21 +75,33 @@ function renderResult(query, { results = [], loading = false, error = "" } = {})
       return [];
     }
   });
+  const answerContent = answer
+    ? `<section class="ai-answer" aria-labelledby="ai-answer-title">
+        <div class="ai-answer-heading">
+          <h2 id="ai-answer-title">Réponse de Nova</h2>
+          <span>Synthèse IA des sources Web</span>
+        </div>
+        <p>${escapeHTML(answer)}</p>
+      </section>`
+    : summaryError
+      ? `<div class="summary-warning" role="status">${escapeHTML(summaryError)}</div>`
+      : "";
+  const resultsContent = validResults.length
+    ? `<div class="search-results">${validResults.map((result, index) => `
+        <article class="search-result-card">
+          <div class="search-result-domain">[${index + 1}] · ${escapeHTML(result.domain)}</div>
+          <a class="search-result-link" href="${escapeHTML(result.url)}" target="_blank" rel="noopener noreferrer">
+            <h2>${escapeHTML(result.title || result.url)}</h2>
+          </a>
+          <p>${escapeHTML(result.content || "Ouvrir cette source pour consulter les détails.")}</p>
+          <a class="search-result-url" href="${escapeHTML(result.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(result.url)}</a>
+        </article>`).join("")}</div>`
+    : '<div class="empty-state">Aucun résultat trouvé. Essayez avec d’autres mots-clés.</div>';
   const content = loading
-    ? '<div class="empty-state" role="status">Recherche sur le Web en cours…</div>'
+    ? '<div class="empty-state" role="status">Recherche et synthèse IA en cours…</div>'
     : error
       ? `<div class="empty-state error-state" role="alert">${escapeHTML(error)}</div>`
-      : validResults.length
-        ? `<div class="search-results">${validResults.map((result) => `
-          <article class="search-result-card">
-            <div class="search-result-domain">${escapeHTML(result.domain)}</div>
-            <a class="search-result-link" href="${escapeHTML(result.url)}" target="_blank" rel="noopener noreferrer">
-              <h2>${escapeHTML(result.title || result.url)}</h2>
-            </a>
-            <p>${escapeHTML(result.content || "Ouvrir cette source pour consulter les détails.")}</p>
-            <a class="search-result-url" href="${escapeHTML(result.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(result.url)}</a>
-          </article>`).join("")}</div>`
-        : '<div class="empty-state">Aucun résultat trouvé. Essayez avec d’autres mots-clés.</div>';
+      : `${answerContent}${resultsContent}`;
 
   resultView.innerHTML = `
     <div class="result-header">
@@ -106,9 +118,9 @@ function renderResult(query, { results = [], loading = false, error = "" } = {})
         </button>
       </div>
     </div>
-    <div class="search-result-count">${loading ? "Recherche en cours" : error ? "Service indisponible" : `${validResults.length} résultat${validResults.length === 1 ? "" : "s"}`}</div>
+    <div class="search-result-count">${loading ? "Recherche et synthèse IA en cours" : error ? "Service indisponible" : `${answer ? "Synthèse IA · " : ""}${validResults.length} source${validResults.length === 1 ? "" : "s"}`}</div>
     ${content}
-    <p class="search-disclaimer">Vérifiez les informations directement auprès des sites sources.</p>`;
+    <p class="search-disclaimer">La synthèse s’appuie sur les extraits affichés. Vérifiez les informations auprès des sources.</p>`;
   showView("result", "Résultats");
 }
 
@@ -143,7 +155,11 @@ async function submitQuery(value) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Le moteur de recherche n’a pas pu traiter cette demande.");
     if (!Array.isArray(payload.results)) throw new Error("La réponse du moteur de recherche est invalide.");
-    renderResult(query, { results: payload.results });
+    renderResult(query, {
+      results: payload.results,
+      answer: typeof payload.answer === "string" ? payload.answer : "",
+      summaryError: typeof payload.summaryError === "string" ? payload.summaryError : "",
+    });
   } catch (error) {
     console.error("La recherche Web a échoué :", error);
     const message = error instanceof TypeError
@@ -201,11 +217,14 @@ async function checkSearchStatus() {
     const response = await fetch(new URL("/health", searchApiUrl));
     const payload = await response.json();
     const configured = response.ok && payload.configured === true;
-    status.classList.toggle("is-ready", configured);
+    const aiConfigured = configured && payload.aiConfigured === true;
+    status.classList.toggle("is-ready", aiConfigured);
+    status.classList.toggle("is-degraded", configured && !aiConfigured);
     status.classList.toggle("is-unavailable", !configured);
-    status.innerHTML = `<span class="provider-dot"></span>${configured ? "Recherche Web gratuite" : "Moteur indisponible"}`;
+    status.innerHTML = `<span class="provider-dot"></span>${aiConfigured ? "Recherche + IA gratuites" : configured ? "Recherche prête · IA indisponible" : "Moteur indisponible"}`;
   } catch (error) {
     console.warn("Impossible de vérifier le moteur de recherche :", error);
+    status.classList.remove("is-ready", "is-degraded");
     status.classList.add("is-unavailable");
     status.innerHTML = '<span class="provider-dot"></span>Moteur indisponible';
   }
@@ -250,7 +269,7 @@ document.addEventListener("click", async (event) => {
 
   if (action === "new-search") resetHome();
   if (action === "mobile-menu") document.querySelector("#sidebar").classList.toggle("is-open");
-  if (action === "help") showToast("Nova affiche les résultats Web fournis par Tavily. Le quota gratuit est limité à 1 000 recherches simples par mois.");
+  if (action === "help") showToast("Tavily offre 1 000 recherches gratuites par mois. Cloudflare Workers AI dispose d’un quota gratuit quotidien.");
   if (action === "copy") {
     try {
       await navigator.clipboard.writeText(currentQuery);

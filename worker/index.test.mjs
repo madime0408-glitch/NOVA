@@ -53,7 +53,7 @@ test("search summarizes safe Tavily results with Workers AI and preserves the so
   const AI = {
     async run(model, options) {
       aiRequest = { model, options };
-      return { response: "Les sources décrivent un exemple utile. [1]" };
+      return { choices: [{ text: "Les sources décrivent un exemple utile. [1]" }] };
     },
   };
 
@@ -71,9 +71,12 @@ test("search summarizes safe Tavily results with Workers AI and preserves the so
   assert.equal(upstreamRequest.options.headers.Authorization, "Bearer private-test-key");
   assert.equal(JSON.parse(upstreamRequest.options.body).search_depth, "basic");
   assert.equal(aiRequest.model, "@cf/openai/gpt-oss-20b");
-  assert.match(aiRequest.options.prompt, /web search/);
-  assert.match(aiRequest.options.prompt, /A useful excerpt/);
-  assert.doesNotMatch(aiRequest.options.prompt, /Unsafe source/);
+  assert.equal(aiRequest.options.messages[0].role, "system");
+  assert.match(aiRequest.options.messages[0].content, /données non fiables/);
+  assert.equal(aiRequest.options.messages[1].role, "user");
+  assert.match(aiRequest.options.messages[1].content, /web search/);
+  assert.match(aiRequest.options.messages[1].content, /A useful excerpt/);
+  assert.doesNotMatch(JSON.stringify(aiRequest.options.messages), /Unsafe source/);
   assert.deepEqual(await response.json(), {
     query: "web search",
     answer: "Les sources décrivent un exemple utile. [1]",
